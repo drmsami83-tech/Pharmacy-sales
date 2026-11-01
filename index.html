@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>مبيعات الصيدلية</title>
+    
+    <!-- إعدادات شاشة الآيفون للـ PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="المبيعات">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3063/3063822.png">
+
+    <!-- Tailwind CSS & Chart.js عبر CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Tajawal', sans-serif; -webkit-tap-highlight-color: transparent; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4 pb-20 select-none">
+
+    <!-- Header -->
+    <header class="flex justify-between items-center mb-6 pt-2">
+        <div>
+            <h1 class="text-xl font-bold text-emerald-400">سجل مبيعات الصيدلية</h1>
+            <p class="text-xs text-slate-400" id="currentDate"></p>
+        </div>
+        <button onclick="exportData()" class="bg-slate-800 border border-slate-700 text-xs px-3 py-2 rounded-lg text-slate-300 active:bg-slate-700">
+            تصدير JSON
+        </button>
+    </header>
+
+    <!-- Cards Summary -->
+    <div class="grid grid-cols-2 gap-3 mb-6">
+        <div class="bg-slate-800 border border-slate-700/60 p-4 rounded-xl">
+            <span class="text-xs text-slate-400 block mb-1">إجمالي اليوم</span>
+            <div class="text-2xl font-bold text-white"><span id="todayTotal">0</span> <span class="text-xs text-emerald-400">ج.م</span></div>
+        </div>
+        <div class="bg-slate-800 border border-slate-700/60 p-4 rounded-xl">
+            <span class="text-xs text-slate-400 block mb-1">عدد العمليات</span>
+            <div class="text-2xl font-bold text-white" id="todayCount">0</div>
+        </div>
+    </div>
+
+    <!-- Quick Add Form -->
+    <div class="bg-slate-800 border border-slate-700/60 p-4 rounded-xl mb-6 shadow-lg">
+        <h2 class="text-sm font-semibold mb-3 text-slate-200">تسجيل حركة بيع جديدة</h2>
+        <form id="saleForm" class="space-y-3">
+            <div>
+                <input type="text" id="itemName" placeholder="اسم الصنف (اختياري / روشتة / OTC)" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            </div>
+            <div class="flex gap-2">
+                <input type="number" step="0.5" id="saleAmount" placeholder="المبلغ *" required class="w-2/3 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-lg font-bold text-emerald-400 focus:outline-none focus:border-emerald-500">
+                <select id="paymentType" class="w-1/3 bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-slate-300 focus:outline-none">
+                    <option value="كاش">كاش</option>
+                    <option value="فيزا">فيزا</option>
+                    <option value="آجل">آجل</option>
+                </select>
+            </div>
+            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold py-2.5 rounded-lg text-sm transition">
+                حفظ العملية
+            </button>
+        </form>
+    </div>
+
+    <!-- Chart Report -->
+    <div class="bg-slate-800 border border-slate-700/60 p-4 rounded-xl mb-6">
+        <h2 class="text-sm font-semibold mb-3 text-slate-200">حركة المبيعات (آخر 7 أيام)</h2>
+        <canvas id="salesChart" height="180"></canvas>
+    </div>
+
+    <!-- Recent Transactions -->
+    <div class="bg-slate-800 border border-slate-700/60 p-4 rounded-xl">
+        <div class="flex justify-between items-center mb-3">
+            <h2 class="text-sm font-semibold text-slate-200">آخر العمليات</h2>
+            <button onclick="clearAllData()" class="text-[10px] text-rose-400 underline">مسح السجل</button>
+        </div>
+        <div id="recentList" class="space-y-2 max-h-48 overflow-y-auto">
+            <!-- Transactions rendered here -->
+        </div>
+    </div>
+
+    <script>
+        // إعداد التاريخ
+        document.getElementById('currentDate').innerText = new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' });
+
+        // إدارة البيانات المحلية
+        let sales = JSON.parse(localStorage.getItem('pharmacy_sales') || '[]');
+        let chartInstance = null;
+
+        function saveSales() {
+            localStorage.setItem('pharmacy_sales', JSON.stringify(sales));
+            renderUI();
+        }
+
+        // تسجيل عملية جديدة
+        document.getElementById('saleForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('itemName').value.trim() || 'صنف عام';
+            const amount = parseFloat(document.getElementById('saleAmount').value);
+            const method = document.getElementById('paymentType').value;
+            
+            if (isNaN(amount) || amount <= 0) return;
+
+            const newSale = {
+                id: Date.now(),
+                name,
+                amount,
+                method,
+                timestamp: new Date().toISOString()
+            };
+
+            sales.unshift(newSale);
+            saveSales();
+
+            document.getElementById('itemName').value = '';
+            document.getElementById('saleAmount').value = '';
+        });
+
+        // تحديث الواجهة والتقارير
+        function renderUI() {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const todaySales = sales.filter(s => s.timestamp.startsWith(todayStr));
+            
+            // الكروت
+            const total = todaySales.reduce((acc, curr) => acc + curr.amount, 0);
+            document.getElementById('todayTotal').innerText = total.toLocaleString('ar-EG');
+            document.getElementById('todayCount').innerText = todaySales.length.toLocaleString('ar-EG');
+
+            // قائمة آخر العمليات
+            const listEl = document.getElementById('recentList');
+            if (sales.length === 0) {
+                listEl.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">لا توجد عمليات مسجلة بعد</p>';
+            } else {
+                listEl.innerHTML = sales.slice(0, 8).map(s => `
+                    <div class="flex justify-between items-center py-1.5 border-b border-slate-700/40 text-xs">
+                        <div>
+                            <span class="font-medium text-slate-200">${s.name}</span>
+                            <span class="text-[10px] text-slate-400 block">${new Date(s.timestamp).toLocaleTimeString('ar-EG', {hour: '2-digit', minute:'2-digit'})} • ${s.method}</span>
+                        </div>
+                        <span class="font-bold text-emerald-400">${s.amount.toFixed(2)} ج.م</span>
+                    </div>
+                `).join('');
+            }
+
+            renderChart();
+        }
+
+        // رسم بياني لمبيعات آخر 7 أيام
+        function renderChart() {
+            const daysMap = {};
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                daysMap[d.toISOString().split('T')[0]] = 0;
+            }
+
+            sales.forEach(s => {
+                const day = s.timestamp.split('T')[0];
+                if (daysMap[day] !== undefined) {
+                    daysMap[day] += s.amount;
+                }
+            });
+
+            const labels = Object.keys(daysMap).map(d => {
+                const parts = d.split('-');
+                return `${parts[1]}/${parts[2]}`;
+            });
+            const data = Object.values(daysMap);
+
+            if (chartInstance) chartInstance.destroy();
+
+            const ctx = document.getElementById('salesChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'المبيعات اليومية',
+                        data: data,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { grid: { color: '#334155' }, ticks: { color: '#94a3b8', font: { size: 10 } } },
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 10 } } }
+                    }
+                }
+            });
+        }
+
+        // تصدير البيانات كملف JSON
+        function exportData() {
+            const blob = new Blob([JSON.stringify(sales, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `pharmacy-sales-${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+        }
+
+        function clearAllData() {
+            if (confirm('هل أنت متأكد من مسح جميع البيانات المسجلة محلياً؟')) {
+                sales = [];
+                saveSales();
+            }
+        }
+
+        // تشغيل أولي
+        renderUI();
+    </script>
+</body>
+</html>
